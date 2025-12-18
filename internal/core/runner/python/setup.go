@@ -20,8 +20,14 @@ import (
 //go:embed python.so
 var python_lib []byte
 
-const (
-	LIB_PATH = "/var/sandbox/sandbox-python"
+var (
+	LIB_PATH = func() string {
+		root := os.Getenv("SANDBOX_WORKDIR")
+		if root == "" {
+			root = os.TempDir()
+		}
+		return path.Join(root, "sandbox-python")
+	}()
 	LIB_NAME = "python.so"
 )
 

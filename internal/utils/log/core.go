@@ -153,7 +153,12 @@ func init() {
 
 func initlog() {
 	var err error
-	main_log, err = NewLog("./logs")
+	// prefer writable temp dir for serverless environments
+	temp := os.TempDir()
+	if temp == "" {
+		temp = "."
+	}
+	main_log, err = NewLog(temp + "/logs")
 	if err != nil {
 		panic(err)
 	}

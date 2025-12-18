@@ -2,6 +2,7 @@ package nodejs
 
 import (
 	"embed"
+	_ "embed"
 	"fmt"
 	"os"
 	"path"
@@ -11,8 +12,8 @@ import (
 
 const (
 	LIB_PATH     = "/var/sandbox/sandbox-nodejs"
-	LIB_NAME     = "nodejs.so"
-	PROJECT_NAME = "nodejs-project"
+	LIB_NAME     = "node.so"
+	PROJECT_NAME = "nodejs_runner"
 )
 
 //go:embed nodejs.so
