@@ -1,0 +1,110 @@
+name: Build And Push to ECR (Test)
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Architecture to build'
+        required: true
+        default: 'amd64'
+        type: choice
+        options:
+          - amd64
+          - arm64
+
+jobs:
+  build-and-push-ecr:
+    name: Build and Push to ECR (${{ inputs.arch }})
+    runs-on: ${{ inputs.arch == 'arm64' && 'arm64_runner' || 'ubuntu-latest' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: sudo apt-get install -y pkg-config gcc libseccomp-dev
+
+      - name: Install yq for version configuration
+        run: |
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "x86_64" ]; then
+            YQ_ARCH="amd64"
+          elif [ "$ARCH" = "aarch64" ]; then
+            YQ_ARCH="arm64"
+          else
+            echo "Unsupported architecture: $ARCH"
+            exit 1
+          fi
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${YQ_ARCH}
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Read Go version from configuration
+        id: go-version
+        run: |
+          GO_VERSION=$(yq eval '.versions.golang' docker/versions.yaml)
+          echo "go-version=${GO_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ steps.go-version.outputs.go-version }}
+
+      - name: Install dependencies
+        run: go mod tidy
+
+      - name: Run Build Binary
+        run: bash ./build/build_${{ inputs.arch }}.sh
+
+      - name: Generate Dockerfiles
+        run: |
+          cd docker
+          ./generate.sh production ${{ inputs.arch }}
+
+      - name: Run Build Docker Image
+        run: docker build -t dify-sandbox -f ./docker/${{ inputs.arch }}-production.gen.dockerfile .
+
+      # Push to AWS ECR
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ECR_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_ECR_ACCESS_SECRET }}
+          aws-region: ${{ vars.AWS_ECR_REGION || 'us-east-1' }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Extract ECR metadata (tags, labels) for Docker
+        id: ecr-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.AWS_ECR_URL }}
+          tags: |
+            type=raw,value=test-${{ inputs.arch }}
+            type=sha,enable=true,priority=100,prefix=,suffix=-${{ inputs.arch }},format=short
+
+      - name: Tag Docker Images for ECR
+        run: |
+          for tag in $(echo "${{ steps.ecr-meta.outputs.tags }}" | tr ',' '\n'); do
+            echo "Tagging: $tag"
+            docker tag dify-sandbox "$tag"
+          done
+
+      - name: Push Docker Image to ECR
+        run: |
+          for tag in $(echo "${{ steps.ecr-meta.outputs.tags }}" | tr ',' '\n'); do
+            echo "Pushing: $tag"
+            docker push "$tag"
+          done
+
+      - name: Summary
+        run: |
+          echo "## 🚀 Build and Push Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Architecture:** ${{ inputs.arch }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pushed Tags:**" >> $GITHUB_STEP_SUMMARY
+          for tag in $(echo "${{ steps.ecr-meta.outputs.tags }}" | tr ',' '\n'); do
+            echo "- \`$tag\`" >> $GITHUB_STEP_SUMMARY
+          done
+
